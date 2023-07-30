@@ -30,6 +30,9 @@ class WhiteboardApp:
         self.points_buffer_draw = []     # Separate buffer for actual drawing
         self.lock = threading.Lock()
 
+        self.canvas.bind("<Motion>", self.on_preview)
+
+
     def create_toolbar(self):
         toolbar = tk.Frame(self.root, bd=1, relief=tk.RAISED)
         toolbar.pack(fill=tk.X)
