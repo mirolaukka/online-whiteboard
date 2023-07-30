@@ -25,7 +25,15 @@ class WhiteboardApp:
         self.create_toolbar()
 
         self.batch_size = 10  # Number of points to send in each batch
-        self.points_buffer = []
+        self.drawing = False
+        self.points_buffer_preview = []  # Separate buffer for pen preview
+        self.points_buffer_draw = []     # Separate buffer for actual drawing
+        self.after_id = None  # Store the ID returned by after method
+
+        self.preview_pen_color = "black"
+        self.preview_pen_width = 5
+
+        self.canvas.bind("<Motion>", self.on_preview)
 
     def create_toolbar(self):
         toolbar = tk.Frame(self.root, bd=1, relief=tk.RAISED)
@@ -44,11 +52,27 @@ class WhiteboardApp:
         clear_btn = Button(toolbar, text="Clear", command=self.clear_canvas)
         clear_btn.pack(side=tk.LEFT, padx=10)
 
+    def on_preview(self, event):
+        # Clear the previous preview oval on the main canvas
+        self.canvas.delete("preview_pen")
+
+        # Draw the new preview of the pen position directly on the main canvas
+        x, y = event.x, event.y
+        self.canvas.create_oval(
+            x - self.preview_pen_width, y - self.preview_pen_width,
+            x + self.preview_pen_width, y + self.preview_pen_width,
+            fill=self.preview_pen_color, width=0, tags="preview_pen"
+        )
+        self.points_buffer_preview.append((x, y, self.preview_pen_width, self.preview_pen_color))
+
+
     def change_pen_color(self, color):
         self.pen_color = color
+        self.preview_pen_color = color
 
     def change_pen_width(self, width):
         self.pen_width = int(width)
+        self.preview_pen_width = int(width)
 
     def clear_canvas(self):
         self.canvas.delete("all")
@@ -56,24 +80,30 @@ class WhiteboardApp:
 
     def start_drawing(self, event):
         self.drawing = True
-        self.points_buffer.append((event.x, event.y, self.pen_width, self.pen_color))
+        self.points_buffer_draw.append((event.x, event.y, self.pen_width, self.pen_color))
         self.after_id = self.root.after(100, self.send_batch_points)
 
     def stop_drawing(self, event):
         self.drawing = False
+        if self.after_id:
+            self.root.after_cancel(self.after_id)  # Cancel the scheduled after call
+            self.after_id = None
+
+        if self.points_buffer_draw:
+            self.points_buffer_draw.clear()
 
     def send_batch_points(self):
-        if self.points_buffer:
-            message = json.dumps(self.points_buffer).encode()
+        if self.points_buffer_draw:
+            message = json.dumps(self.points_buffer_draw).encode()
             self.server_socket.sendall(message)
-            self.points_buffer.clear()
+            self.points_buffer_draw.clear()
         self.after_id = self.root.after(100, self.send_batch_points)
 
     def on_drag(self, event):
         if self.drawing:
             x, y = event.x, event.y
             self.canvas.create_oval(x, y, x + self.pen_width, y + self.pen_width, fill=self.pen_color, width=0)
-            self.points_buffer.append((x, y, self.pen_width, self.pen_color))
+            self.points_buffer_draw.append((x, y, self.pen_width, self.pen_color))
 
 def receive_points(canvas, server_socket):
     buffer = b""
