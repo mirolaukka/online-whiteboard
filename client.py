@@ -111,17 +111,20 @@ def receive_points(canvas, server_socket):
         data = server_socket.recv(4096)  # Use a reasonable buffer size
         if not data:
             break
+        if data == b'clear':
+            canvas.delete("all")
+        else:
 
-        buffer += data
-        try:
-            while buffer:
-                # Try to decode JSON data from the buffer
-                points, buffer = json.loads(buffer.decode()), b""
-                for x, y, width, color in points:
-                    canvas.create_oval(x, y, x + width, y + width, fill=color, width=0)
-        except json.JSONDecodeError:
-            # Incomplete JSON data received, continue receiving
-            pass
+            buffer += data
+            try:
+                while buffer:
+                    # Try to decode JSON data from the buffer
+                    points, buffer = json.loads(buffer.decode()), b""
+                    for x, y, width, color in points:
+                        canvas.create_oval(x, y, x + width, y + width, fill=color, width=0)
+            except json.JSONDecodeError:
+                # Incomplete JSON data received, continue receiving
+                pass
 
 def main():
     root = tk.Tk()
