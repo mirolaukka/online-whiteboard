@@ -3,6 +3,7 @@ import threading
 import tkinter as tk
 import json
 from tkinter import Canvas, messagebox, Scale, Button
+from queue import Queue
 
 HOST = "127.0.0.1"
 PORT = 8080
@@ -24,16 +25,10 @@ class WhiteboardApp:
 
         self.create_toolbar()
 
-        self.batch_size = 10  # Number of points to send in each batch
         self.drawing = False
         self.points_buffer_preview = []  # Separate buffer for pen preview
         self.points_buffer_draw = []     # Separate buffer for actual drawing
-        self.after_id = None  # Store the ID returned by after method
-
-        self.preview_pen_color = "black"
-        self.preview_pen_width = 5
-
-        self.canvas.bind("<Motion>", self.on_preview)
+        self.lock = threading.Lock()
 
     def create_toolbar(self):
         toolbar = tk.Frame(self.root, bd=1, relief=tk.RAISED)
@@ -53,51 +48,37 @@ class WhiteboardApp:
         clear_btn.pack(side=tk.LEFT, padx=10)
 
     def on_preview(self, event):
-        # Clear the previous preview oval on the main canvas
         self.canvas.delete("preview_pen")
-
-        # Draw the new preview of the pen position directly on the main canvas
         x, y = event.x, event.y
         self.canvas.create_oval(
-            x - self.preview_pen_width, y - self.preview_pen_width,
-            x + self.preview_pen_width, y + self.preview_pen_width,
-            fill=self.preview_pen_color, width=0, tags="preview_pen"
+            x - self.pen_width, y - self.pen_width,
+            x + self.pen_width, y + self.pen_width,
+            fill=self.pen_color, width=0, tags="preview_pen"
         )
-        self.points_buffer_preview.append((x, y, self.preview_pen_width, self.preview_pen_color))
-
+        self.points_buffer_preview.append((x, y, self.pen_width, self.pen_color))
 
     def change_pen_color(self, color):
         self.pen_color = color
-        self.preview_pen_color = color
 
     def change_pen_width(self, width):
         self.pen_width = int(width)
-        self.preview_pen_width = int(width)
 
     def clear_canvas(self):
         self.canvas.delete("all")
-        self.server_socket.sendall("clear".encode())
+        self.send_data("clear".encode())
 
     def start_drawing(self, event):
         self.drawing = True
         self.points_buffer_draw.append((event.x, event.y, self.pen_width, self.pen_color))
-        self.after_id = self.root.after(100, self.send_batch_points)
 
     def stop_drawing(self, event):
         self.drawing = False
-        if self.after_id:
-            self.root.after_cancel(self.after_id)  # Cancel the scheduled after call
-            self.after_id = None
+        self.send_data(json.dumps(self.points_buffer_draw).encode())
+        self.points_buffer_draw.clear()
 
-        if self.points_buffer_draw:
-            self.points_buffer_draw.clear()
-
-    def send_batch_points(self):
-        if self.points_buffer_draw:
-            message = json.dumps(self.points_buffer_draw).encode()
-            self.server_socket.sendall(message)
-            self.points_buffer_draw.clear()
-        self.after_id = self.root.after(100, self.send_batch_points)
+    def send_data(self, data):
+        with self.lock:
+            self.server_socket.sendall(data)
 
     def on_drag(self, event):
         if self.drawing:
@@ -105,26 +86,31 @@ class WhiteboardApp:
             self.canvas.create_oval(x, y, x + self.pen_width, y + self.pen_width, fill=self.pen_color, width=0)
             self.points_buffer_draw.append((x, y, self.pen_width, self.pen_color))
 
-def receive_points(canvas, server_socket):
+def receive_points(canvas, server_socket, data_queue):
     buffer = b""
     while True:
         data = server_socket.recv(4096)  # Use a reasonable buffer size
         if not data:
             break
         if data == b'clear':
-            canvas.delete("all")
+            data_queue.put("clear")
         else:
-
             buffer += data
             try:
                 while buffer:
-                    # Try to decode JSON data from the buffer
                     points, buffer = json.loads(buffer.decode()), b""
-                    for x, y, width, color in points:
-                        canvas.create_oval(x, y, x + width, y + width, fill=color, width=0)
+                    data_queue.put(points)
             except json.JSONDecodeError:
-                # Incomplete JSON data received, continue receiving
                 pass
+
+def process_data(data_queue, canvas):
+    while True:
+        data = data_queue.get()
+        if data == "clear":
+            canvas.delete("all")
+        else:
+            for x, y, width, color in data:
+                canvas.create_oval(x, y, x + width, y + width, fill=color, width=0)
 
 def main():
     root = tk.Tk()
@@ -140,8 +126,12 @@ def main():
     app = WhiteboardApp(root, server_socket)
     root.protocol("WM_DELETE_WINDOW", lambda: root.quit())
 
-    receiver_thread = threading.Thread(target=receive_points, args=(app.canvas, server_socket))
+    data_queue = Queue()
+    receiver_thread = threading.Thread(target=receive_points, args=(app, server_socket, data_queue))
     receiver_thread.start()
+
+    data_processor_thread = threading.Thread(target=process_data, args=(data_queue, app.canvas))
+    data_processor_thread.start()
 
     root.mainloop()
 
